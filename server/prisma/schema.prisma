@@ -1,0 +1,414 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+enum Role {
+  SHOPKEEPER
+  CUSTOMER
+  SUPPLIER
+  DELIVERY
+  EMPLOYEE
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum InventoryTransactionType {
+  SALE
+  PURCHASE
+  DAMAGE
+  LOSS
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+enum StockChangeReason {
+  SALE
+  PURCHASE
+  DAMAGE
+  LOSS
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  MANUAL
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  CARD
+  CREDIT
+  OTHER
+}
+
+model User{
+  id       String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean @default(true)
+  shopkeeper Shopkeeper?
+  customerProfile CustomerProfile?
+  inventoryTransactions InventoryTransaction[] @relation("InventoryTransactionCreatedBy")
+  salesBills SalesBill[] @relation("SalesBillCreatedBy")
+  salesPayments SalesPayment[] @relation("SalesPaymentCreatedBy")
+  stockLogs StockLog[] @relation("StockLogCreatedBy")
+  expenses Expense[] @relation("ExpenseCreatedBy")
+  damageRecords DamageRecord[] @relation("DamageRecordCreatedBy")
+}
+
+model Shopkeeper {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  phone      String?
+  gstNumber  String?
+  panNumber  String?
+  kycStatus  KycStatus?
+  kycDocumentUrl String?
+  kycVerifiedAt DateTime?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id])
+  shops Shop[]
+}
+
+model Shop {
+  id           String   @id @default(uuid())
+  name         String
+  description  String?
+  phone        String?
+  email        String?
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String
+  postalCode   String
+  latitude     Decimal? @db.Decimal(9, 6)
+  longitude    Decimal? @db.Decimal(9, 6)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  shopkeeperId String
+
+  shopkeeper Shopkeeper @relation(fields: [shopkeeperId], references: [id])
+  inventoryItems InventoryItem[]
+  inventoryCategories InventoryCategory[]
+  inventoryTransactions InventoryTransaction[]
+  salesBills SalesBill[]
+  customers Customer[]
+  stockLogs StockLog[]
+  expenses Expense[]
+  damageRecords DamageRecord[]
+
+  @@index([shopkeeperId])
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  shopId    String
+  name      String
+  phone     String
+  email     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop  Shop       @relation(fields: [shopId], references: [id])
+  bills SalesBill[]
+
+  @@index([shopId])
+  @@unique([shopId, phone])
+}
+
+model InventoryCategory {
+  id          String   @id @default(uuid())
+  shopId      String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shop  Shop            @relation(fields: [shopId], references: [id])
+  items InventoryItem[]
+
+  @@index([shopId])
+  @@unique([shopId, name])
+}
+
+model InventoryItem {
+  id           String   @id @default(uuid())
+  shopId       String
+  categoryId   String?
+  name         String
+  description  String?
+  sku          String?
+  unit         String?
+  quantity     Int      @default(0)
+  reorderLevel Int?
+  costPrice    Decimal? @db.Decimal(10, 2)
+  sellingPrice Decimal? @db.Decimal(10, 2)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop     Shop               @relation(fields: [shopId], references: [id])
+  category InventoryCategory? @relation(fields: [categoryId], references: [id])
+  transactionItems InventoryTransactionItem[]
+  salesBillItems SalesBillItem[]
+  stockLogs StockLog[]
+  damageRecords DamageRecord[]
+
+  @@index([shopId])
+  @@index([shopId, categoryId])
+  @@index([shopId, name])
+  @@unique([shopId, sku])
+}
+
+model InventoryTransaction {
+  id              String                   @id @default(uuid())
+  shopId          String
+  type            InventoryTransactionType
+  reference       String?
+  notes           String?
+  createdByUserId String
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  shop      Shop  @relation(fields: [shopId], references: [id])
+  createdBy User  @relation("InventoryTransactionCreatedBy", fields: [createdByUserId], references: [id])
+  items     InventoryTransactionItem[]
+  salesBill SalesBill?
+  stockLogs StockLog[]
+  damageRecords DamageRecord[]
+
+  @@index([shopId])
+  @@index([shopId, type])
+  @@index([createdByUserId])
+}
+
+model InventoryTransactionItem {
+  id              String   @id @default(uuid())
+  transactionId   String
+  inventoryItemId String
+  quantity        Int
+  unitCost        Decimal? @db.Decimal(10, 2)
+  unitPrice       Decimal? @db.Decimal(10, 2)
+
+  transaction   InventoryTransaction @relation(fields: [transactionId], references: [id])
+  inventoryItem InventoryItem        @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([transactionId])
+  @@index([inventoryItemId])
+  @@unique([transactionId, inventoryItemId])
+}
+
+model SalesBill {
+  id              String        @id @default(uuid())
+  shopId          String
+  billNumber      String
+  customerId      String?
+  customerName    String?
+  customerPhone   String?
+  customerEmail   String?
+  notes           String?
+  subtotalAmount  Decimal       @db.Decimal(10, 2)
+  discountAmount  Decimal       @db.Decimal(10, 2)
+  taxAmount       Decimal       @db.Decimal(10, 2)
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  paidAmount      Decimal       @db.Decimal(10, 2)
+  status          PaymentStatus
+  paymentMode     PaymentMode
+  dueDate         DateTime?
+  createdByUserId String
+  transactionId   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  shop        Shop                  @relation(fields: [shopId], references: [id])
+  customer    Customer?             @relation(fields: [customerId], references: [id])
+  createdBy   User                  @relation("SalesBillCreatedBy", fields: [createdByUserId], references: [id])
+  transaction InventoryTransaction? @relation(fields: [transactionId], references: [id])
+  items       SalesBillItem[]
+  payments    SalesPayment[]
+  stockLogs   StockLog[]
+
+  @@index([shopId])
+  @@index([shopId, status])
+  @@index([createdByUserId])
+  @@unique([shopId, billNumber])
+  @@unique([transactionId])
+}
+
+model SalesBillItem {
+  id              String   @id @default(uuid())
+  billId          String
+  inventoryItemId String
+  quantity        Int
+  unitPrice       Decimal  @db.Decimal(10, 2)
+  lineTotal       Decimal  @db.Decimal(10, 2)
+
+  bill          SalesBill     @relation(fields: [billId], references: [id])
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([billId])
+  @@index([inventoryItemId])
+  @@unique([billId, inventoryItemId])
+}
+
+model SalesPayment {
+  id              String     @id @default(uuid())
+  billId          String
+  amount          Decimal    @db.Decimal(10, 2)
+  paymentMode     PaymentMode
+  reference       String?
+  notes           String?
+  paidAt          DateTime   @default(now())
+  createdByUserId String
+
+  bill      SalesBill @relation(fields: [billId], references: [id])
+  createdBy User      @relation("SalesPaymentCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([billId])
+  @@index([createdByUserId])
+}
+
+model StockLog {
+  id                     String            @id @default(uuid())
+  shopId                 String
+  inventoryItemId        String
+  changeQuantity         Int
+  previousQuantity       Int
+  newQuantity            Int
+  reason                 StockChangeReason
+  inventoryTransactionId String?
+  salesBillId            String?
+  notes                  String?
+  createdByUserId        String
+  createdAt              DateTime          @default(now())
+
+  shop                 Shop                  @relation(fields: [shopId], references: [id])
+  inventoryItem        InventoryItem         @relation(fields: [inventoryItemId], references: [id])
+  createdBy            User                  @relation("StockLogCreatedBy", fields: [createdByUserId], references: [id])
+  inventoryTransaction InventoryTransaction? @relation(fields: [inventoryTransactionId], references: [id])
+  salesBill            SalesBill?            @relation(fields: [salesBillId], references: [id])
+  damageRecord         DamageRecord?         @relation("DamageRecordStockLog")
+
+  @@index([shopId])
+  @@index([inventoryItemId])
+  @@index([shopId, reason])
+}
+
+model Expense {
+  id              String      @id @default(uuid())
+  shopId          String
+  title           String
+  category        String?
+  amount          Decimal     @db.Decimal(10, 2)
+  occurredAt      DateTime    @default(now())
+  paymentMode     PaymentMode?
+  reference       String?
+  notes           String?
+  createdByUserId String
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  shop      Shop @relation(fields: [shopId], references: [id])
+  createdBy User @relation("ExpenseCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([shopId])
+  @@index([shopId, occurredAt])
+}
+
+model DamageRecord {
+  id              String     @id @default(uuid())
+  shopId          String
+  inventoryItemId String
+  quantity        Int
+  unitCost        Decimal?   @db.Decimal(10, 2)
+  totalCost       Decimal?   @db.Decimal(10, 2)
+  reason          String?
+  occurredAt      DateTime   @default(now())
+  createdByUserId String
+  transactionId   String?
+  stockLogId      String?    @unique
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  shop          Shop                  @relation(fields: [shopId], references: [id])
+  inventoryItem InventoryItem         @relation(fields: [inventoryItemId], references: [id])
+  createdBy     User                  @relation("DamageRecordCreatedBy", fields: [createdByUserId], references: [id])
+  transaction   InventoryTransaction? @relation(fields: [transactionId], references: [id])
+  stockLog      StockLog?             @relation("DamageRecordStockLog", fields: [stockLogId], references: [id])
+
+  @@index([shopId])
+  @@index([inventoryItemId])
+}
+
+model CustomerProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  fullName       String?
+  phone          String?
+  alternatePhone String?
+  avatarUrl      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user      User             @relation(fields: [userId], references: [id])
+  addresses CustomerAddress[]
+
+  @@index([userId])
+}
+
+model CustomerAddress {
+  id            String   @id @default(uuid())
+  profileId     String
+  label         String?
+  recipientName String?
+  phone         String?
+  addressLine1  String
+  addressLine2  String?
+  landmark      String?
+  city          String
+  state         String
+  postalCode    String
+  country       String?
+  latitude      Decimal? @db.Decimal(9, 6)
+  longitude     Decimal? @db.Decimal(9, 6)
+  isDefault     Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  profile CustomerProfile @relation(fields: [profileId], references: [id])
+
+  @@index([profileId])
+  @@index([profileId, isDefault])
+}
