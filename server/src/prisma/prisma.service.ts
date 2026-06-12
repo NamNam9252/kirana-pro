@@ -12,20 +12,24 @@ export class PrismaService extends PrismaClient {
             throw new Error('DATABASE_URL is required');
         }
 
-        const caPath = path.resolve(process.cwd(), 'prisma', 'ca.pem');
-        const ca = fs.readFileSync(caPath, 'utf8');
         const url = new URL(connectionString);
         const database = url.pathname.replace(/^\//, '');
+        const isLocal = ['localhost', '127.0.0.1'].includes(url.hostname);
+
+        let sslConfig: object | undefined;
+        if (!isLocal) {
+            const caPath = path.resolve(process.cwd(), 'prisma', 'ca.pem');
+            const ca = fs.readFileSync(caPath, 'utf8');
+            sslConfig = { ca, rejectUnauthorized: true };
+        }
+
         const adapter = new PrismaPg({
             host: url.hostname,
             port: url.port ? Number(url.port) : 5432,
             user: decodeURIComponent(url.username),
             password: decodeURIComponent(url.password),
             database,
-            ssl: {
-                ca,
-                rejectUnauthorized: true,
-            },
+            ...(sslConfig ? { ssl: sslConfig } : {}),
         });
         super({ adapter });
     }

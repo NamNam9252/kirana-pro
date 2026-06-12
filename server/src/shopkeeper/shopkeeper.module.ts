@@ -7,6 +7,7 @@ import { CustomerModule } from './customer/customer.module';
 import { StockLogModule } from './stock-log/stock-log.module';
 import { ExpenseModule } from './expense/expense.module';
 import { DamageModule } from './damage/damage.module';
+import { ShopkeeperOrderModule } from './order/order.module';
 
 @Module({
   imports: [
@@ -18,6 +19,8 @@ import { DamageModule } from './damage/damage.module';
     StockLogModule,
     ExpenseModule,
     DamageModule,
+    ShopkeeperOrderModule,
   ],
 })
 export class ShopkeeperModule {}
+

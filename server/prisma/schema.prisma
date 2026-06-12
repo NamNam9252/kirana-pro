@@ -61,6 +61,22 @@ enum PaymentMode {
   OTHER
 }
 
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  REJECTED
+}
+
+enum OrderType {
+  DELIVERY
+  TAKEAWAY
+}
+
 model User{
   id       String   @id @default(uuid())
   name      String
@@ -78,6 +94,7 @@ model User{
   stockLogs StockLog[] @relation("StockLogCreatedBy")
   expenses Expense[] @relation("ExpenseCreatedBy")
   damageRecords DamageRecord[] @relation("DamageRecordCreatedBy")
+  orders Order[] @relation("OrderCustomer")
 }
 
 model Shopkeeper {
@@ -124,6 +141,7 @@ model Shop {
   stockLogs StockLog[]
   expenses Expense[]
   damageRecords DamageRecord[]
+  orders Order[]
 
   @@index([shopkeeperId])
 }
@@ -183,6 +201,7 @@ model InventoryItem {
   salesBillItems SalesBillItem[]
   stockLogs StockLog[]
   damageRecords DamageRecord[]
+  orderItems OrderItem[]
 
   @@index([shopId])
   @@index([shopId, categoryId])
@@ -383,6 +402,7 @@ model CustomerProfile {
 
   user      User             @relation(fields: [userId], references: [id])
   addresses CustomerAddress[]
+  orders    Order[]
 
   @@index([userId])
 }
@@ -408,7 +428,82 @@ model CustomerAddress {
   updatedAt     DateTime @updatedAt
 
   profile CustomerProfile @relation(fields: [profileId], references: [id])
+  orders  Order[]
 
   @@index([profileId])
   @@index([profileId, isDefault])
+}
+
+model Order {
+  id                String      @id @default(uuid())
+  orderNumber       String      @unique
+  shopId            String
+  customerProfileId String
+  customerUserId    String
+  deliveryAddressId String?
+  orderType         OrderType
+  status            OrderStatus @default(PLACED)
+
+  // Address snapshot (frozen at order time)
+  deliveryAddress   String?
+  deliveryCity      String?
+  deliveryState     String?
+  deliveryPostalCode String?
+  deliveryLatitude  Decimal?    @db.Decimal(9, 6)
+  deliveryLongitude Decimal?    @db.Decimal(9, 6)
+
+  // Contact
+  customerName      String
+  customerPhone     String?
+  customerEmail     String?
+
+  // Financials
+  subtotalAmount    Decimal     @db.Decimal(10, 2)
+  deliveryFee       Decimal     @db.Decimal(10, 2) @default(0)
+  discountAmount    Decimal     @db.Decimal(10, 2) @default(0)
+  taxAmount         Decimal     @db.Decimal(10, 2) @default(0)
+  totalAmount       Decimal     @db.Decimal(10, 2)
+  paymentMode       PaymentMode @default(CASH)
+  paymentStatus     PaymentStatus @default(UNPAID)
+
+  // Timing
+  notes             String?
+  rejectionReason   String?
+  cancellationReason String?
+  estimatedReadyAt  DateTime?
+  confirmedAt       DateTime?
+  preparedAt        DateTime?
+  readyAt           DateTime?
+  deliveredAt       DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  shop              Shop             @relation(fields: [shopId], references: [id])
+  customerProfile   CustomerProfile  @relation(fields: [customerProfileId], references: [id])
+  customerUser      User             @relation("OrderCustomer", fields: [customerUserId], references: [id])
+  address           CustomerAddress? @relation(fields: [deliveryAddressId], references: [id])
+  items             OrderItem[]
+
+  @@index([shopId])
+  @@index([shopId, status])
+  @@index([customerUserId])
+  @@index([customerProfileId])
+}
+
+model OrderItem {
+  id              String   @id @default(uuid())
+  orderId         String
+  inventoryItemId String
+  itemName        String
+  itemDescription String?
+  quantity        Int
+  unitPrice       Decimal  @db.Decimal(10, 2)
+  lineTotal       Decimal  @db.Decimal(10, 2)
+
+  order         Order         @relation(fields: [orderId], references: [id])
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([orderId])
+  @@index([inventoryItemId])
 }

@@ -1,78 +1,61 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+export interface NearbyShopRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  addressLine1: string;
+  addressLine2: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  distanceKm: number;
+}
+
 @Injectable()
 export class SearchService {
   constructor(private prisma: PrismaService) {}
 
-  private toRadians(deg: number) {
-    return (deg * Math.PI) / 180;
+  /**
+   * Find all active shops within `radiusKm` of the given coordinates
+   * using PostGIS ST_DWithin for spatial filtering and ST_Distance for sorting.
+   */
+  async findNearbyShops(lat: number, lng: number, radiusKm = 5, limit = 50): Promise<NearbyShopRow[]> {
+    const radiusMeters = radiusKm * 1000;
+
+    const shops = await this.prisma.$queryRawUnsafe<NearbyShopRow[]>(
+      `
+      SELECT
+        "id", "name", "phone", "addressLine1", "addressLine2",
+        "latitude", "longitude",
+        ST_Distance(
+          "location"::geography,
+          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+        ) / 1000.0 AS "distanceKm"
+      FROM "Shop"
+      WHERE "isActive" = true
+        AND "location" IS NOT NULL
+        AND ST_DWithin(
+          "location"::geography,
+          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+          $3
+        )
+      ORDER BY "distanceKm" ASC
+      LIMIT $4
+      `,
+      lng,
+      lat,
+      radiusMeters,
+      limit,
+    );
+
+    return shops;
   }
 
-  private haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371; // Earth radius km
-    const dLat = this.toRadians(lat2 - lat1);
-    const dLon = this.toRadians(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRadians(lat1)) * Math.cos(this.toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private boundingBox(lat: number, lng: number, radiusKm: number) {
-    // Approximate conversions
-    const latDelta = radiusKm / 111.32; // degrees
-    const lngDelta = radiusKm / (111.32 * Math.cos(this.toRadians(lat)));
-    return {
-      minLat: lat - latDelta,
-      maxLat: lat + latDelta,
-      minLng: lng - lngDelta,
-      maxLng: lng + lngDelta,
-    };
-  }
-
-  async findNearbyShops(lat: number, lng: number, radiusKm = 5, limit = 50) {
-    const bbox = this.boundingBox(lat, lng, radiusKm);
-
-    const shops = await this.prisma.shop.findMany({
-      where: {
-        latitude: {
-          gte: bbox.minLat,
-          lte: bbox.maxLat,
-        },
-        longitude: {
-          gte: bbox.minLng,
-          lte: bbox.maxLng,
-        },
-        isActive: true,
-      },
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        addressLine1: true,
-        addressLine2: true,
-        latitude: true,
-        longitude: true,
-      },
-    });
-
-    const withDistance = shops
-      .map((s) => {
-        const latS = Number(s.latitude as any);
-        const lngS = Number(s.longitude as any);
-        const dist = this.haversineDistanceKm(lat, lng, latS, lngS);
-        return { ...s, distanceKm: dist };
-      })
-      .filter((s) => s.distanceKm <= radiusKm)
-      .sort((a, b) => a.distanceKm - b.distanceKm)
-      .slice(0, limit);
-
-    return withDistance;
-  }
-
+  /**
+   * Search inventory items across shops near the given coordinates.
+   * First finds nearby shops via PostGIS, then queries their inventory via Prisma.
+   */
   async searchItemsByLocation(
     lat: number,
     lng: number,
@@ -82,30 +65,12 @@ export class SearchService {
     limit = 100,
     offset = 0,
   ) {
-    const bbox = this.boundingBox(lat, lng, radiusKm);
-
-    const shops = await this.prisma.shop.findMany({
-      where: {
-        latitude: { gte: bbox.minLat, lte: bbox.maxLat },
-        longitude: { gte: bbox.minLng, lte: bbox.maxLng },
-        isActive: true,
-      },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        addressLine1: true,
-        addressLine2: true,
-        latitude: true,
-        longitude: true,
-      },
-      take: limit,
-      skip: offset,
-    });
-
-    const shopIds = shops.map((s) => s.id);
+    // Step 1: Get nearby shops with PostGIS
+    const nearbyShops = await this.findNearbyShops(lat, lng, radiusKm, 200);
+    const shopIds = nearbyShops.map((s) => s.id);
     if (shopIds.length === 0) return [];
 
+    // Step 2: Build inventory filter
     const whereClause: any = {
       shopId: { in: shopIds },
       isActive: true,
@@ -116,7 +81,6 @@ export class SearchService {
         { name: { contains: q, mode: 'insensitive' } },
         { description: { contains: q, mode: 'insensitive' } },
         { sku: { contains: q, mode: 'insensitive' } },
-        // category name condition below via relation
       ];
     }
 
@@ -125,6 +89,7 @@ export class SearchService {
       whereClause.OR.push({ category: { name: { contains: category, mode: 'insensitive' } } });
     }
 
+    // Step 3: Fetch matching inventory items
     const items = await this.prisma.inventoryItem.findMany({
       where: whereClause,
       select: {
@@ -137,36 +102,32 @@ export class SearchService {
         shopId: true,
         category: { select: { id: true, name: true } },
       },
-      take: 500,
+      take: limit,
+      skip: offset,
     });
 
-    const shopMap = new Map<string, any>();
-    for (const s of shops) {
-      const latS = Number(s.latitude as any);
-      const lngS = Number(s.longitude as any);
-      const dist = this.haversineDistanceKm(lat, lng, latS, lngS);
-      shopMap.set(s.id, { shop: s, distanceKm: dist, items: [] as any[] });
+    // Step 4: Group items by shop with distance info
+    const shopMap = new Map<string, { shop: NearbyShopRow; items: any[] }>();
+    for (const s of nearbyShops) {
+      shopMap.set(s.id, { shop: s, items: [] });
     }
 
-    for (const it of items) {
-      const entry = shopMap.get(it.shopId);
+    for (const item of items) {
+      const entry = shopMap.get(item.shopId);
       if (!entry) continue;
-      if (entry.distanceKm > radiusKm) continue;
       entry.items.push({
-        id: it.id,
-        name: it.name,
-        description: it.description,
-        sku: it.sku,
-        sellingPrice: it.sellingPrice,
-        quantity: it.quantity,
-        category: it.category,
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        sku: item.sku,
+        sellingPrice: item.sellingPrice,
+        quantity: item.quantity,
+        category: item.category,
       });
     }
 
-    const result = Array.from(shopMap.values())
+    return Array.from(shopMap.values())
       .filter((s) => s.items.length > 0)
-      .sort((a, b) => a.distanceKm - b.distanceKm);
-
-    return result;
+      .sort((a, b) => a.shop.distanceKm - b.shop.distanceKm);
   }
 }
